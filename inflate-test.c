@@ -129,7 +129,7 @@ int main(int argc, char const* const* argv) {
   ioState.out = (unsigned char*)malloc(ioState.decompressedLength);
   ioState.outFile = output;
 
-  DeflateState* state = malloc(sizeof(DeflateState));
+  InflateState* state = malloc(sizeof(InflateState));
   DeflateInit(state);
   state->bytesRemain = &bytesRemain;
   state->readByte = &readByte;

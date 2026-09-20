@@ -1,3 +1,5 @@
+// Copyright (C) 2019 Kuy Mainwaring (https://github.com/kuym)
+
 #ifndef EMBEDDED_DELATE_H_
 #define EMBEDDED_DELATE_H_
 
@@ -9,7 +11,7 @@ typedef int16_t s16;
 typedef uint32_t u32;
 
 // DEFLATE (e.g. gzip) decompressor
-typedef struct DeflateState {
+typedef struct InflateState {
   // Client function pointers:
 
   // This is the context passed opaquely to the following four callbacks.
@@ -35,9 +37,9 @@ typedef struct DeflateState {
   u8 distTree[12 * 3], litTree[16 * 3];
   u16 valueTable[337];
 
-} DeflateState;
+} InflateState;
 
-u8 DeflateInit(DeflateState* context);
-u8 DeflateDecodeNextBlock(DeflateState* context);
+u8 DeflateInit(InflateState* context);
+u8 DeflateDecodeNextBlock(InflateState* context);
 
 #endif // #ifndef EMBEDDED_DELATE_H_

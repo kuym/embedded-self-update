@@ -1,3 +1,7 @@
+// Copyright (C) 2019 Kuy Mainwaring (https://github.com/kuym)
+
+// DEFLATE (IETF RFC 1951) decompressor implementation
+
 #include "inflate.h"
 
 #define EXECUTE_FROM_RAM
@@ -5,15 +9,13 @@
 #include <string.h> // memset()
 #include <stdlib.h> // abort()
 
-// DEFLATE (IETF RFC 1951) implementation
-
 // LUTs are 24-bit values with the upper 12 bits as length and the bottom 12
 //   bits as symbol value.
 // Length tables, used to construct LUTs, have a length in the upper 4 bits and
 //   value in the lower 12 bits.
 
 EXECUTE_FROM_RAM
-static u16 readBits(DeflateState* state, u8 b) {
+static u16 readBits(InflateState* state, u8 b) {
   if((b > 16) || (state->haveBits < 0)) {
     // TODO: make this behavior configurable.
     abort();
@@ -38,7 +40,7 @@ static u16 readBits(DeflateState* state, u8 b) {
 }
 
 EXECUTE_FROM_RAM
-static u16 readReverseBits(DeflateState* state, u16 b) {
+static u16 readReverseBits(InflateState* state, u16 b) {
   static const u8 kBitswap[] =
     {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
 
@@ -150,7 +152,7 @@ static u16 makeTable(u8* lutOut, u16* lutIn, s16 count) {
 // literal or length symbol or a distance depending on the context.
 EXECUTE_FROM_RAM
 static u16 decodeSymbol(
-  DeflateState* state,
+  InflateState* state,
   u8 const* lut,
   u16 const* valueTable
 ) {
@@ -172,7 +174,7 @@ static u16 decodeSymbol(
 
 EXECUTE_FROM_RAM
 static void decodeCompressedTables(
-  DeflateState* state,
+  InflateState* state,
   u8 const* lut,
   u16 const* valueTable
 ) {
@@ -224,7 +226,7 @@ static void decodeCompressedTables(
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeDEFLATEData(DeflateState* state) {
+static u8 decodeDEFLATEData(InflateState* state) {
   static u8 const kLengthLUTMinus10[] = {1, 3, 5, 7, 9, 13, 17, 21, 25, 33, 41,
     49, 57, 73, 89, 105, 121, 153, 185, 217, 248};
 
@@ -280,7 +282,7 @@ static u8 decodeDEFLATEData(DeflateState* state) {
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeUncompressedBlock(DeflateState* state) {
+static u8 decodeUncompressedBlock(InflateState* state) {
   u8 skip = (state->haveBits & 7);
   state->bitWindow >>= skip;
   state->haveBits -= skip;
@@ -297,7 +299,7 @@ static u8 decodeUncompressedBlock(DeflateState* state) {
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeFixedTableBlock(DeflateState* state) {
+static u8 decodeFixedTableBlock(InflateState* state) {
   {
     u16 i = 0;
     for(; i < 144; i++)
@@ -325,7 +327,7 @@ static u8 decodeFixedTableBlock(DeflateState* state) {
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeDynamicTableBlock(DeflateState* state) {
+static u8 decodeDynamicTableBlock(InflateState* state) {
   // RFC1951 section 3.2.7
   u16 hNumLiterals = 257 + readBits(state, 5),
     hNumDistances = 1 + readBits(state, 5),
@@ -366,14 +368,14 @@ static u8 decodeDynamicTableBlock(DeflateState* state) {
 }
 
 EXECUTE_FROM_RAM
-u8 DeflateInit(DeflateState* state) {
+u8 DeflateInit(InflateState* state) {
   state->bitWindow = 0;
   state->haveBits = 0;
   return 0;
 }
 
 EXECUTE_FROM_RAM
-u8 DeflateDecodeNextBlock(DeflateState* state) {
+u8 DeflateDecodeNextBlock(InflateState* state) {
   // Decode the block header.
   u8 isLastBlock = (u8)readBits(state, 1), blockType = (u8)readBits(state, 2),
     r = 0;

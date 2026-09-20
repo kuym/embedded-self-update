@@ -2,7 +2,7 @@
 
 A highly optimized, ultra-low RAM footprint suite of C utilities designed for firmware self-update scenarios on resource-constrained microcontrollers (e.g., ARM Cortex-M series like STM32L1).
 
-Copyright (C) 2019 Kuy Mainwaring (https://github.com/kuym)
+Copyright (C) 2019-2026 Kuy Mainwaring (https://github.com/kuym)
 
 ## The Story
 This project was born out of a specific challenge: implementing a secure, compressed firmware update mechanism on an STM32L1-series microcontroller with extremely limited RAM. 
@@ -14,7 +14,7 @@ The result is a compact, dependency-free toolkit where decryption (AES), integri
 ## Key Features
 *   **Ultra-Low RAM Footprint:** DEFLATE decompression requires only ~746 bytes of working memory.
 *   **Zero Dependencies:** Standard C library only; ideal for bare-metal or RTOS environments.
-*   **Streaming Architecture:** Uses a callback-based approach (`DeflateState`) to allow seamless chaining of cryptographic and decompression layers.
+*   **Streaming Architecture:** Uses a callback-based approach (`InflateState`) to allow seamless chaining of cryptographic and decompression layers.
 *   **End-to-End Security Toolkit:**
     *   **AES-128:** Optimized implementation (including 32-bit vectorized key expansion) for block decryption.
     *   **SHA-256:** NIST FIPS 180-4 compliant for payload integrity.
@@ -31,6 +31,7 @@ The core strength of this library is its **chainable pipeline**. Using the provi
 | Module | Purpose | Implementation Note |
 | :--- | :--- | :--- |
 | **`inflate.c`** | DEFLATE (RFC 1951) Decoder | Uses a window-based bitstream reader and callback-driven output. |
+| **`deflate.c`** | DEFLATE (RFC 1951) Encoder | Similar to the above. |
 | **`aes128.c`** | AES-128 Decryption | Includes optimized S-Box lookups to save Flash memory. |
 | **`sha256.c`** | SHA-256 Hashing | Provides high-integrity verification for the firmware blob. |
 | **`crc32.c`** | CRC-32 Checksum | Fast error detection for the transmission/decryption process. |
