@@ -10,7 +10,7 @@ typedef uint16_t u16;
 typedef int16_t s16;
 typedef uint32_t u32;
 
-void KeyExpansion(u8 const* key, u8* outKS);
-void AESDecipherBlock(u8 const* block, u8 const* ks, u8* out);
+void AES128DecipherBlock(u8 const* block, u8 const* ks, u8* out);
+void AES256DecipherBlock(u8 const* block, u8 const* key, u8* out);
 
 #endif // #ifndef EMBEDDED_AES128_H_

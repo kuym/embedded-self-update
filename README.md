@@ -16,7 +16,7 @@ The result is a compact, dependency-free toolkit where decryption (AES), integri
 *   **Zero Dependencies:** Standard C library only; ideal for bare-metal or RTOS environments.
 *   **Streaming Architecture:** Uses a callback-based approach (`InflateState`) to allow seamless chaining of cryptographic and decompression layers.
 *   **End-to-End Security Toolkit:**
-    *   **AES-128:** Optimized implementation (including 32-bit vectorized key expansion) for block decryption.
+    *   **AES-128 / AES-256:** Optimized implementation (including 32-bit vectorized key expansion) for block decryption.
     *   **SHA-256:** NIST FIPS 180-4 compliant for payload integrity.
     *   **CRC-32:** Standard polynomial implementation for error detection.
 *   **RAM-Optimized:** Designed with `EXECUTE_FROM_RAM` macros in mind, making it suitable for self-updating bootloaders that must run entirely from RAM to prevent overwriting themselves during the update process.
@@ -32,7 +32,7 @@ The core strength of this library is its **chainable pipeline**. Using the provi
 | :--- | :--- | :--- |
 | **`inflate.c`** | DEFLATE (RFC 1951) Decoder | Uses a window-based bitstream reader and callback-driven output. |
 | **`deflate.c`** | DEFLATE (RFC 1951) Encoder | Similar to the above. |
-| **`aes128.c`** | AES-128 Decryption | Includes optimized S-Box lookups to save Flash memory. |
+| **`aes128.c`** | AES-128 and AES-256 Decryption | Includes optimized S-Box lookups to save Flash memory. |
 | **`sha256.c`** | SHA-256 Hashing | Provides high-integrity verification for the firmware blob. |
 | **`crc32.c`** | CRC-32 Checksum | Fast error detection for the transmission/decryption process. |
 | **`selfupdate.c`**| The "Glue" Layer | Implements the `CryptoFlashState` to link AES and DEFLATE. |

@@ -7,7 +7,7 @@
 #include <string.h> // memcpy()
 #include <stdlib.h>  // abort()
 
-// AES-128 (NIST FIPS 197) Implementation
+// AES-128 and AES-256 (NIST FIPS 197) Implementation
 
 static const u8 kAESStateBoxInverse[256] = {
   0x52, 0x09, 0x6A, 0xD5, 0x30, 0x36, 0xA5, 0x38, 0xBF, 0x40, 0xA3, 0x9E, 0x81,
@@ -60,7 +60,8 @@ static u32 aesStateBox4x(u32 i) {
   return out;
 }
 
-void aesExpandKey8(u8 const* key, u8 round, u8* outKeyState) {
+EXECUTE_FROM_RAM
+static void aesExpandKey128_8bitCPU(u8 const* key, u8 round, u8* outKeyState) {
   u8 state[16];
   memcpy(state, key, 16);
 
@@ -93,7 +94,8 @@ void aesExpandKey8(u8 const* key, u8 round, u8* outKeyState) {
 }
 
 // Vectorized aesExpandKey for 32-bit CPUs.
-void aesExpandKey(u8 const* key, u8 round, u8* outKeyState) {
+EXECUTE_FROM_RAM
+static void aesExpandKey128(u8 const* key, u8 round, u8* outKeyState) {
   u32 state[4];
   memcpy((void*)&state[0], (void*)key, 16);
 
@@ -113,6 +115,28 @@ void aesExpandKey(u8 const* key, u8 round, u8* outKeyState) {
   memcpy((void*)outKeyState, (void*)&state[0], 16);
 }
 
+// Vectorized key expansion for AES-256.  The 256-bit schedule advances eight
+//   words (two round keys) per step, so `round` selects a step and a half.
+EXECUTE_FROM_RAM
+static void aesExpandKey256(u8 const* key, u8 round, u8* outKeyState) {
+  u32 state[8];
+  memcpy((void*)&state[0], (void*)key, 32);
+
+  u8 a = 1;
+  for(u8 i = 0; i < (round >> 1); i++) {
+    state[0] ^= (aesStateBox4x((state[7] >> 8) | (state[7] << 24)) ^ a);
+    state[1] ^= state[0];
+    state[2] ^= state[1];
+    state[3] ^= state[2];
+    state[4] ^= aesStateBox4x(state[3]);
+    state[5] ^= state[4];
+    state[6] ^= state[5];
+    state[7] ^= state[6];
+
+    a <<= 1;  // at most 7 steps, so no GF(2^8) reduction is needed
+  }
+  memcpy((void*)outKeyState, (void*)&state[(round & 1) << 2], 16);
+}
 
 EXECUTE_FROM_RAM
 static void aesAddRoundKey(u8* state, u8 const* key) {
@@ -175,22 +199,33 @@ static void aesMixColumns(u8* state) {
 }
 
 EXECUTE_FROM_RAM
-void AESDecipherBlock(u8 const* block, u8 const* key, u8* out) {
-  
+static void aesDecipherBlock(u8 const* block, u8 const* key, u8* out,
+  int rounds, void (*expandKey)(u8 const*, u8, u8*)) {
+
   u8 keySchedule[16];
   u8 state[16];
   memcpy(state, block, 16);
 
-  aesExpandKey(key, 10, keySchedule);
+  expandKey(key, (u8)rounds, keySchedule);
   aesAddRoundKey(state, keySchedule);
 
-  for(int i = 0; i < 9; i++) {
+  for(int i = 0; i < (rounds - 1); i++) {
     aesSubBytesShiftRows(state, kAESStateBoxInverse);
-    aesExpandKey(key, 9 - i, keySchedule);
+    expandKey(key, (u8)(rounds - 1 - i), keySchedule);
     aesAddRoundKey(state, keySchedule);
     aesMixColumns(state);
   }
   aesSubBytesShiftRows(state, kAESStateBoxInverse);
   aesAddRoundKey(state, key);
   memcpy(out, state, 16);
+}
+
+EXECUTE_FROM_RAM
+void AES128DecipherBlock(u8 const* block, u8 const* key, u8* out) {
+  aesDecipherBlock(block, key, out, 10, aesExpandKey128);
+}
+
+EXECUTE_FROM_RAM
+void AES256DecipherBlock(u8 const* block, u8 const* key, u8* out) {
+  aesDecipherBlock(block, key, out, 14, aesExpandKey256);
 }

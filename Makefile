@@ -17,7 +17,8 @@ global_cflags=-O3 -Wall
 all: tests selfupdate
 
 # define virtual targets
-.PHONY: all mkdirs tests inflate-tests deflate-tests corpus corpus-canterbury \
+.PHONY: all mkdirs tests inflate-tests deflate-tests aes-tests corpus \
+	corpus-canterbury inflate-test deflate-test aes-test \
 	selfupdate clean
 
 
@@ -59,6 +60,17 @@ $(build_dir)/deflate-test: test-common.c deflate-test.c deflate.c deflate.h crc3
 		deflate-test.c \
 		deflate.c \
 		crc32.c
+
+$(build_dir)/aes-test: aes-test.c aes128.c aes128.h
+	@mkdir -p $(build_dir)
+	$(CC) $(global_cflags) -o $@ \
+		aes-test.c \
+		aes128.c
+
+# Convenience targets for the test binaries.
+inflate-test: $(build_dir)/inflate-test
+deflate-test: $(build_dir)/deflate-test
+aes-test: $(build_dir)/aes-test
 
 $(build_dir)/inflate-test.log: $(build_dir)/inflate-test test/inflate1.gz test/inflate1.out
 	$(build_dir)/inflate-test test/inflate1.gz $(build_dir)/inflate1.out > $(build_dir)/inflate-test.log
@@ -123,11 +135,17 @@ $(build_dir)/deflate-test.log: $(build_dir)/deflate-test $(build_dir)/inflate-te
 	echo "deflate: $$pass passed, $$fail failed ($$inTotal bytes in, $$outTotal bytes out)" | tee -a $@; \
 	test $$fail -eq 0
 
+# Decipher the NIST FIPS 197 known-answer vectors for each key size.
+$(build_dir)/aes-test.log: $(build_dir)/aes-test
+	$(build_dir)/aes-test > $@
+
 inflate-tests: $(build_dir)/inflate-test.log
 
 deflate-tests: $(build_dir)/deflate-test.log
 
-tests: inflate-tests deflate-tests
+aes-tests: $(build_dir)/aes-test.log
+
+tests: inflate-tests deflate-tests aes-tests
 
 
 #  Selfupdate
@@ -171,6 +189,7 @@ $(obj_dir)/.selfupdate_depend: $(selfupdate_sources)
 
 clean:
 	rm -f	$(build_dir)/inflate-test $(build_dir)/deflate-test \
+			$(build_dir)/aes-test $(build_dir)/aes-test.log \
 			$(build_dir)/selfupdate-test \
 			$(build_dir)/inflate-test.log $(build_dir)/inflate-diff.log \
 			$(build_dir)/deflate-test.log $(build_dir)/selfupdate-test.log \
