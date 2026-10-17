@@ -7,36 +7,53 @@
 #define EXECUTE_FROM_RAM
 
 #include <string.h> // memset()
-#include <stdlib.h> // abort()
 
 // LUTs are 24-bit values with the upper 12 bits as length and the bottom 12
 //   bits as symbol value.
 // Length tables, used to construct LUTs, have a length in the upper 4 bits and
 //   value in the lower 12 bits.
 
+// Stops the decoder.  Nothing below returns an error directly: the routines
+// that read the bitstream return data, so a failure anywhere is recorded in
+// `state->status`, they carry on returning zeroes, and the loops that call them
+// check the status once per symbol.  The first reason given is the one kept.
+EXECUTE_FROM_RAM
+static void stop(InflateState* state, u8 status) {
+  if(state->status == 0)
+    state->status = status;
+}
+
 EXECUTE_FROM_RAM
 static u16 readBits(InflateState* state, u8 b) {
   if((b > 16) || (state->haveBits < 0)) {
-    // TODO: make this behavior configurable.
-    abort();
+    stop(state, kInflateCorrupt);
+    return 0;
   }
 
   if(state->haveBits < b) {
     while((state->haveBits < 25) &&
       state->bytesRemain(state->context)) {
-      state->bitWindow |= (u32)(state->readByte(state->context)
-        << state->haveBits);
+      state->bitWindow |= ((u32)state->readByte(state->context))
+        << state->haveBits;
       state->haveBits += 8;
     }
 
-    if(state->haveBits < b)
+    if(state->haveBits < b) {
+      stop(state, kInflateTruncated);
       return 0;
+    }
   }
 
   u16 v = (u16)(state->bitWindow & ((1 << b) - 1));
   state->bitWindow >>= b;
   state->haveBits -= b;
   return v;
+}
+
+EXECUTE_FROM_RAM
+static void writeByte(InflateState* state, u8 value) {
+  if(!state->writeByte(state->context, value))
+    stop(state, kInflateStopped);
 }
 
 EXECUTE_FROM_RAM
@@ -109,12 +126,24 @@ static inline u32 lookupTableRead(u8 const* table, u16 index) {
   return (((u32)table[0]) << 16) | (((u32)table[1]) << 8) | (u32)table[2];
 }
 
+// Builds the look-up table for the `count` codes in `lutIn`, into `lutOut`,
+// which has room for `maxRows` rows.  Returns the number of rows used, which is
+// the number of distinct code lengths; 0 if there are no codes at all.
 EXECUTE_FROM_RAM
-static u16 makeTable(u8* lutOut, u16* lutIn, s16 count) {
+static u8 makeTable(
+  InflateState* state,
+  u8* lutOut,
+  u8 maxRows,
+  u16* lutIn,
+  s16 count
+) {
   deflateQS(lutIn, 0, count - 1);
   // Trim codes with zero bit-length from the end.
   while((count > 0) && ((lutIn[count - 1] >> 12) == 0))
     count--;
+
+  if(count == 0)
+    return 0;
 
   u16 lastMax = 0, lastBits = (lutIn[0] >> 12), di = 0, sc = 0;
   u32 moreBits = lastBits;
@@ -127,7 +156,11 @@ static u16 makeTable(u8* lutOut, u16* lutIn, s16 count) {
       moreBits = bits - lastBits;
       sc = (u16)((sc + 1) << moreBits);
 
-      lookupTableWrite(lutOut, ++di, (sc - lastMax) | (moreBits << 16));
+      if(++di >= maxRows) {
+        stop(state, kInflateCorrupt);
+        return 0;
+      }
+      lookupTableWrite(lutOut, di, (sc - lastMax) | (moreBits << 16));
 
       lastBits = bits;
     } else {
@@ -136,7 +169,7 @@ static u16 makeTable(u8* lutOut, u16* lutIn, s16 count) {
     }
   }
 
-  return di + 1;
+  return (u8)(di + 1);
 }
 
 // Decodes a Huffman-encoded symbol from the bitstream using the provided
@@ -149,16 +182,18 @@ static u16 makeTable(u8* lutOut, u16* lutIn, s16 count) {
 // maximum, and so on.  If any value `v` is less than the maximum for the
 // current row, its value is looked up from the value table, where the lowest 12
 // bits (of each 16-bit entry) contains the logical symbol, which may be a
-// literal or length symbol or a distance depending on the context.
+// literal or length symbol or a distance depending on the context.  A code that
+// matches no row of the `rows` in the table stops the decoder.
 EXECUTE_FROM_RAM
 static u16 decodeSymbol(
   InflateState* state,
   u8 const* lut,
+  u8 rows,
   u16 const* valueTable
 ) {
-  u16 i = 0, code = 0, sc = 0, base = 0, max = 0;
-  while(1) {
-    u32 maxStep = lookupTableRead(lut, i++);
+  u16 code = 0, sc = 0, base = 0, max = 0;
+  for(u8 i = 0; i < rows; i++) {
+    u32 maxStep = lookupTableRead(lut, i);
     u16 moreBits = (maxStep >> 16);
     max += (maxStep & 0xFFFF);
     sc = (u16)(sc << moreBits);
@@ -170,12 +205,16 @@ static u16 decodeSymbol(
     base += (max - sc + 1);
     sc = max + 1;
   }
+
+  stop(state, kInflateCorrupt);
+  return 0;
 }
 
 EXECUTE_FROM_RAM
 static void decodeCompressedTables(
   InflateState* state,
   u8 const* lut,
+  u8 rows,
   u16 const* valueTable
 ) {
   u16 lastLength = 0;
@@ -185,7 +224,9 @@ static void decodeCompressedTables(
       sym -= state->usedLCodes;
     }
 
-    u16 v = decodeSymbol(state, lut, valueTable);
+    u16 v = decodeSymbol(state, lut, rows, valueTable);
+    if(state->status)
+      break;
 
     if(v >= 16) {
       u16 rep = 0, value = 0;
@@ -195,13 +236,11 @@ static void decodeCompressedTables(
       else if(v == 18)
         // Repeat code-length '0' 3-10 times (as defined by the next seven bits)
         rep = 11 + readBits(state, 7);
-      else if(v == 16) {
+      else {
         // Repeat the previous code-length 3-6 times (as defined by the next
         // two bits)
         rep = 3 + readBits(state, 2);
         value = lastLength;
-      } else {
-        abort();
       }
 
       while((rep > 0) && (i < 337)) {
@@ -226,21 +265,26 @@ static void decodeCompressedTables(
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeDEFLATEData(InflateState* state) {
+static void decodeDEFLATEData(InflateState* state) {
   static u8 const kLengthLUTMinus10[] = {1, 3, 5, 7, 9, 13, 17, 21, 25, 33, 41,
     49, 57, 73, 89, 105, 121, 153, 185, 217, 248};
 
-  while(1) {
-    if((state->haveBits == 0) && !state->bytesRemain(state->context)) {
-      return 0;
-    }
-    u16 symbol = decodeSymbol(state, state->litTree, state->valueTable);
+  while(!state->status) {
+    u16 symbol = decodeSymbol(state, state->litTree, state->litRows,
+      state->valueTable);
+    if(state->status)
+      break;
 
     if(symbol >= 256) {
       u16 len;
 
       if(symbol >= 265) {
-        if(symbol == 285)
+        if(symbol > 285) {
+          // Symbols 286 and 287 have codes but never occur.
+          stop(state, kInflateCorrupt);
+          break;
+        }
+        else if(symbol == 285)
           len = 258;
         else {
           u16 s = (symbol - 265);
@@ -254,8 +298,13 @@ static u8 decodeDEFLATEData(InflateState* state) {
         len = (symbol - 254);
 
       u16 dist, distCode = decodeSymbol(state, state->distTree,
-        &state->valueTable[state->usedLCodes]);
-      if(distCode < 4)
+        state->distRows, &state->valueTable[state->usedLCodes]);
+      if(distCode > 29) {
+        // Likewise distance codes 30 and 31.
+        stop(state, kInflateCorrupt);
+        break;
+      }
+      else if(distCode < 4)
         dist = (1 + distCode);
       else {
         u16 s = (distCode - 2), b = (s >> 1);
@@ -265,24 +314,20 @@ static u8 decodeDEFLATEData(InflateState* state) {
 
       if(len > 258) {
         // Error: length is over 258.
-        abort();
+        stop(state, kInflateCorrupt);
       }
 
-      while(len-- > 0)
-        state->writeByte(
-          state->context,
-          state->readBack(state->context, dist)
-        );
+      // The length and distance are only meaningful if every read succeeded.
+      while((len-- > 0) && !state->status)
+        writeByte(state, state->readBack(state->context, dist));
     }
     else
-      state->writeByte(state->context, (u8)symbol);
+      writeByte(state, (u8)symbol);
   }
-
-  return 0;
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeUncompressedBlock(InflateState* state) {
+static void decodeUncompressedBlock(InflateState* state) {
   u8 skip = (state->haveBits & 7);
   state->bitWindow >>= skip;
   state->haveBits -= skip;
@@ -290,16 +335,17 @@ static u8 decodeUncompressedBlock(InflateState* state) {
   u16 length = readBits(state, 16), invLength = readBits(state, 16);
 
   if((((~length) ^ invLength) & 0xFFFF) != 0)
-    return 2;
+    stop(state, kInflateBadStoredLength);
 
-  while(length-- > 0)
-    state->writeByte(state->context, (u8)readBits(state, 8));
-
-  return 0;
+  while((length-- > 0) && !state->status) {
+    u8 value = (u8)readBits(state, 8);
+    if(!state->status)
+      writeByte(state, value);
+  }
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeFixedTableBlock(InflateState* state) {
+static void decodeFixedTableBlock(InflateState* state) {
   {
     u16 i = 0;
     for(; i < 144; i++)
@@ -311,23 +357,25 @@ static u8 decodeFixedTableBlock(InflateState* state) {
     for(; i < 288; i++)
       state->valueTable[i] = i | (8 << 12);
   }
-  makeTable(state->litTree, state->valueTable, 288);
+  state->litRows = makeTable(state, state->litTree,
+    sizeof(state->litTree) / 3, state->valueTable, 288);
   // 3.2.6. "Distance codes 0-31 are represented by (fixed-length) 5-bit codes,
   //   with possible additional bits as shown in the table shown in Paragraph
   //   3.2.5, above.  Note that distance codes 30-31 will never actually occur
   //   in the compressed data.
   for(u8 i = 0; i < 32; i++)
     state->valueTable[288 + i] = i | (5 << 12);
-  makeTable(state->distTree, &state->valueTable[288], 32);
-  
+  state->distRows = makeTable(state, state->distTree,
+    sizeof(state->distTree) / 3, &state->valueTable[288], 32);
+
   state->usedLCodes = 288;
   state->usedDCodes = 32;
 
-  return decodeDEFLATEData(state);
+  decodeDEFLATEData(state);
 }
 
 EXECUTE_FROM_RAM
-static u8 decodeDynamicTableBlock(InflateState* state) {
+static void decodeDynamicTableBlock(InflateState* state) {
   // RFC1951 section 3.2.7
   u16 hNumLiterals = 257 + readBits(state, 5),
     hNumDistances = 1 + readBits(state, 5),
@@ -342,7 +390,8 @@ static u8 decodeDynamicTableBlock(InflateState* state) {
       codeLengthTable[kOrderLUT[i]] = (u16)(kOrderLUT[i] |
         (((i < hCodeLengthCodes)? readBits(state, 3) : 0) << 12));
 
-    makeTable(codeLengthDecoder, codeLengthTable, 19);
+    u8 rows = makeTable(state, codeLengthDecoder,
+      sizeof(codeLengthDecoder) / 3, codeLengthTable, 19);
 
     // Decode the next `(hNumLiterals + hNumDistances)` symbols using the
     // temporary `codeLengthTable` and populate state->valueTable accordingly.
@@ -350,42 +399,54 @@ static u8 decodeDynamicTableBlock(InflateState* state) {
     // the distance codes occupy the following `hNumDistances` indices.
     state->usedLCodes = hNumLiterals;
     state->usedDCodes = hNumDistances;
-    decodeCompressedTables(state, codeLengthDecoder, codeLengthTable);
+    decodeCompressedTables(state, codeLengthDecoder, rows, codeLengthTable);
   }
+
+  if(state->status)
+    return;
 
   // Create the tree for literal and length codes.
   memset(state->litTree, 0, sizeof(state->litTree));
-  makeTable(state->litTree, state->valueTable, state->usedLCodes);
+  state->litRows = makeTable(state, state->litTree,
+    sizeof(state->litTree) / 3, state->valueTable, state->usedLCodes);
 
   // Create the tree for distance codes.
   memset(state->distTree, 0, sizeof(state->distTree));
-  makeTable(state->distTree, &state->valueTable[state->usedLCodes],
+  state->distRows = makeTable(state, state->distTree,
+    sizeof(state->distTree) / 3, &state->valueTable[state->usedLCodes],
     state->usedDCodes);
 
   // Finally, now that we have the custom value table, literal and length tree
   // and the distance tree, decode the block itself.
-  return decodeDEFLATEData(state);
+  decodeDEFLATEData(state);
 }
 
 EXECUTE_FROM_RAM
 u8 DeflateInit(InflateState* state) {
   state->bitWindow = 0;
   state->haveBits = 0;
+  state->status = 0;
   return 0;
 }
 
 EXECUTE_FROM_RAM
 u8 DeflateDecodeNextBlock(InflateState* state) {
-  // Decode the block header.
-  u8 isLastBlock = (u8)readBits(state, 1), blockType = (u8)readBits(state, 2),
-    r = 0;
+  if(state->status)
+    return state->status;
 
-  switch(blockType) {
-  case 0:   r = decodeUncompressedBlock(state); break;
-  case 1:   r = decodeFixedTableBlock(state); break;
-  case 2:   r = decodeDynamicTableBlock(state); break;
-  default:  r = 3;  // invalid!
+  // Decode the block header.
+  u8 isLastBlock = (u8)readBits(state, 1), blockType = (u8)readBits(state, 2);
+
+  if(!state->status) {
+    switch(blockType) {
+    case 0:   decodeUncompressedBlock(state); break;
+    case 1:   decodeFixedTableBlock(state); break;
+    case 2:   decodeDynamicTableBlock(state); break;
+    default:  stop(state, kInflateBadBlockType);  // invalid!
+    }
   }
 
-  return (r != 0)? r : isLastBlock;
+  // isLastBlock will have the value 1 (== kInflateDone) if complete,
+  // othwerwise 0 (== kInflateMore).
+  return state->status? state->status : isLastBlock;
 }

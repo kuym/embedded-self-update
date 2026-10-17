@@ -140,11 +140,19 @@ The main loop until the end-of-block symbol (256):
 
 7. Entry points & error model
 
-- DeflateInit — just zeroes bitWindow/haveBits (the rest is assumed stack-zeroed
-  or unused until first block).
+- DeflateInit — just zeroes bitWindow/haveBits/status (the rest is assumed
+  stack-zeroed or unused until first block).
 - DeflateDecodeNextBlock — returns 0 = more blocks follow, 1 = final block
-  complete (BFINAL was set), or an error code (2 = NLEN mismatch, 3 = bad
-  BTYPE). On malformed bitstream data it simply abort().
+  complete (BFINAL was set), or the reason the decoder stopped (2 = NLEN
+  mismatch, 3 = bad BTYPE, 4 = input ran out, 5 = malformed stream, 6 =
+  writeByte returned 0).
+- The routines that read the bitstream return data, so they have no way to
+  return an error. Instead a failure anywhere is recorded in state->status and
+  they carry on returning zeroes; the decoding loops check the status once per
+  symbol and unwind. The status is sticky: once set, no callback is called
+  again and every later DeflateDecodeNextBlock returns it. This is also how a
+  client stops the decoder early — writeByte returns 0. readBack needs no error
+  return of its own, because the byte it returns goes straight to writeByte.
 
 Design trade-offs worth noting:
 
@@ -154,6 +162,8 @@ Design trade-offs worth noting:
 - Speed cost: decodeSymbol is a loop over LUT rows + a linear value-table
   lookup; classic decoders use a flat 2^maxBits table. For a self-update
   loader, this is fine.
-- Simplifications: no zlib/wrapper header handling (raw DEFLATE only), abort
-  () on error rather than recoverable codes, no support for dist > output so
-  far validation beyond the callback's responsibility.
+- Simplifications: no zlib/wrapper header handling (raw DEFLATE only), no
+  support for dist > output so far validation beyond the callback's
+  responsibility. A Huffman code with more distinct code lengths than a tree
+  has rows (16 literal/length, 12 distance, 6 code-length) is reported as
+  malformed rather than decoded.

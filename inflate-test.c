@@ -38,7 +38,7 @@ unsigned char writeByte(void* context, unsigned char value) {
 
   s->out[s->outOffset++] = value;
   fputc(value, s->outFile);
-  return 0;
+  return 1;
 }
 
 unsigned char readBack(void* context, unsigned int offset) {
